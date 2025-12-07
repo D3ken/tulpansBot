@@ -1,5 +1,5 @@
 Установка зависимостей:
-npm i grammy dotenv mongoose
+npm i 
 
 Запуск бота:
 node bot.js
