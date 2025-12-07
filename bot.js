@@ -1,25 +1,51 @@
-import { Bot, GrammyError, HttpError } from 'grammy';
-import { setupHandlers } from './handlers/handlers.js';
-import { connectDB } from './database/db.js';
-import { UserService } from './utils/user-service.js';
+import { Bot, GrammyError, HttpError, session } from 'grammy';
 import { conversations, createConversation } from '@grammyjs/conversations';
+import { hydrate } from '@grammyjs/hydrate';
+import { RedisAdapter } from '@grammyjs/storage-redis';
 import { addAdmin } from './sessions/conversations.js';
-// import { IORedis } from 'ioredis';
+import { addNewEvent } from './sessions/conversations.js';
+import { addNewMix } from './sessions/conversations.js';
+import { deleteMix } from './sessions/conversations.js';
+import { editSoloTulpanPrice } from './sessions/conversations.js';
+import { editSoloTulpanDescription } from './sessions/conversations.js';
+import { editSoloTulpanImages } from './sessions/conversations.js';
+import { editGrowingProcessImage } from './sessions/conversations.js';
+import { initSoloTulpan } from './sessions/conversations.js';
+import { preOrder } from './sessions/conversations.js';
+import { scheduleNews } from './utils/scheduler.js';
+import { setupHandlers } from './handlers/handlers.js';
+import { Services } from './utils/services.js';
+import { connectDB } from './database/db.js';
+import { redis } from './utils/redis.js';
 import 'dotenv/config';
-
-// const redis = new IORedis({
-//   host: 'localhost',
-//   port: 6379,
-// });
 
 const bot = new Bot(process.env.BOT_TOKEN);
 
+bot.use(
+  session({
+    initial: () => ({}),
+    storage: new RedisAdapter({ instance: redis }),
+  })
+);
+
 bot.use(conversations());
 bot.use(createConversation(addAdmin, 'addAdmin'));
+bot.use(createConversation(addNewEvent, 'addNewEvent'));
+bot.use(createConversation(addNewMix, 'addNewMix'));
+bot.use(createConversation(deleteMix, 'deleteMix'));
+bot.use(createConversation(editSoloTulpanPrice, 'editSoloTulpanPrice'));
+bot.use(createConversation(editSoloTulpanDescription, 'editSoloTulpanDescription'));
+bot.use(createConversation(editSoloTulpanImages, 'editSoloTulpanImages'));
+bot.use(createConversation(editGrowingProcessImage, 'editGrowingProcessImage'));
+bot.use(createConversation(initSoloTulpan, 'initSoloTulpan'));
+bot.use(createConversation(preOrder, 'preOrder'));
+bot.use(hydrate());
+
+scheduleNews(bot, redis);
 
 bot.use(async (ctx, next) => {
   try {
-    const user = await UserService.findOrCreateUser(ctx);
+    const user = await Services.findOrCreateUser(ctx);
     ctx.user = user;
     await next();
   } catch (error) {

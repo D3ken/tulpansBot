@@ -1,8 +1,7 @@
 import { InputMediaBuilder } from 'grammy';
 import * as keyboards from '../keyboards/keyboards.js';
-import * as textInfo from '../assets/info/textInfo.js';
 import { adminID } from '../admins.js';
-import { UserService } from '../utils/user-service.js';
+import { Services } from '../utils/services.js';
 
 function handCommands(bot) {
   bot.command('start', async (ctx) => {
@@ -11,10 +10,11 @@ function handCommands(bot) {
       { parse_mode: 'HTML' }
     );
     await ctx.reply('Выберите, что вас интересует в меню 👇', { reply_markup: keyboards.start_kb });
+    console.log(ctx.chatId);
   });
 
   bot.command('admin', async (ctx) => {
-    if (adminID.includes(ctx.from.id) || UserService.checkIsAdmin(ctx.from.id)) {
+    if (adminID.includes(ctx.from.id) || Services.checkIsAdmin(ctx.from.id)) {
       await ctx.reply('<b>Вы попали в админ панель.</b>\n\nВыберите действие которое хотите сделать 👇', {
         reply_markup: keyboards.admin_panel_inlineKb,
         parse_mode: 'HTML',
@@ -31,11 +31,13 @@ function handCommands(bot) {
 
 function handMessages(bot) {
   bot.hears('📖 Узнать о процессе выращивания', async (ctx) => {
-    await ctx.replyWithPhoto(textInfo.growingProcess.image(), {
-      caption: textInfo.growingProcess.title,
+    const growingProcessData = await Services.getGrowingProcess();
+
+    await ctx.replyWithPhoto(growingProcessData.image, {
+      caption: growingProcessData.title,
       parse_mode: 'HTML',
     });
-    await ctx.reply(`${textInfo.growingProcess.text}`, {
+    await ctx.reply(growingProcessData.text, {
       parse_mode: 'HTML',
     });
   });
@@ -48,24 +50,42 @@ function handMessages(bot) {
   });
 
   bot.hears('👤 Связаться с менеджером', async (ctx) => {
-    await ctx.reply('<b>Вы можете связаться с менеджером: @tulpanski1👤\nЛибо нажав на кнопку ниже .</b>', {
-      reply_markup: keyboards.cancelButton_inlineKb,
+    await ctx.reply('<b>Вы можете связаться с менеджером: @tulpanski1🌷\nЛибо нажав на кнопку ниже 👇</b>', {
+      reply_markup: keyboards.contact_manager,
       parse_mode: 'HTML',
     });
+  });
+
+  bot.hears('💳 Сделать предзаказ', async (ctx) => {
+    await ctx.conversation.enter('preOrder');
   });
 }
 
 function handCallbacks(bot) {
   bot.callbackQuery('one_color_tulpans', async (ctx) => {
-    await ctx.replyWithMediaGroup([
-      InputMediaBuilder.photo(textInfo.assortimentInfo.image1(), {
-        caption: textInfo.assortimentInfo.text,
-        parse_mode: 'HTML',
-      }),
-      InputMediaBuilder.photo(textInfo.assortimentInfo.image2()),
-      InputMediaBuilder.photo(textInfo.assortimentInfo.image3()),
-    ]);
     await ctx.answerCallbackQuery();
+
+    const soloTulpan = await Services.getSoloTulpan();
+
+    if (!soloTulpan) {
+      // Если данных нет в БД, запускаем conversation для инициализации
+      await ctx.conversation.enter('initSoloTulpan');
+      return;
+    }
+
+    // Используем данные из БД
+    const mediaGroup = soloTulpan.images.map((imageFileId, index) => {
+      if (index === 0) {
+        return InputMediaBuilder.photo(imageFileId, {
+          caption: soloTulpan.description,
+          parse_mode: 'HTML',
+        });
+      } else {
+        return InputMediaBuilder.photo(imageFileId);
+      }
+    });
+
+    await ctx.replyWithMediaGroup(mediaGroup);
   });
 
   bot.callbackQuery('cancel', async (ctx) => {
@@ -76,19 +96,38 @@ function handCallbacks(bot) {
   bot.callbackQuery('mix_sorts', async (ctx) => {
     await ctx.answerCallbackQuery();
     await ctx.reply('<b>В меню вы можете выбрать один из готовых миксов, либо составить индивидуальный микс 👇</b>', {
-      reply_markup: keyboards.select_mix_inlineKb,
+      reply_markup: await keyboards.select_mix_inlineKb(),
       parse_mode: 'HTML',
     });
   });
 
   bot.callbackQuery(/^option\d+$/, async (ctx) => {
     const optionId = ctx.callbackQuery.data;
+    const mixId = optionId.replace('option', '');
+
     await ctx.answerCallbackQuery();
-    await ctx.replyWithPhoto(textInfo.mixSorts[optionId].image(), {
-      caption: textInfo.mixSorts[optionId].text,
-      reply_markup: keyboards.back_or_buy_inlineKb,
-      parse_mode: 'HTML',
-    });
+
+    const mix = await Services.getMixById(mixId);
+
+    if (!mix) {
+      await ctx.reply('Микс не найден в базе данных.');
+      return;
+    }
+    const caption = `<b>💐 Микс «${mix.title}»</b>\n\n${mix.description}`;
+
+    if (mix.image) {
+      await ctx.replyWithPhoto(mix.image, {
+        caption: caption,
+        reply_markup: keyboards.back_or_buy_inlineKb,
+        parse_mode: 'HTML',
+      });
+    } else {
+      await ctx.reply(caption, {
+        reply_markup: keyboards.back_or_buy_inlineKb,
+        parse_mode: 'HTML',
+      });
+    }
+
     await ctx.deleteMessage();
   });
 
@@ -96,7 +135,7 @@ function handCallbacks(bot) {
     await ctx.answerCallbackQuery();
     await ctx.deleteMessage();
     await ctx.reply('<b>В меню вы можете выбрать один из готовых миксов, либо составить индивидуальный микс 👇</b>', {
-      reply_markup: keyboards.select_mix_inlineKb,
+      reply_markup: await keyboards.select_mix_inlineKb(),
       parse_mode: 'HTML',
     });
   });
@@ -104,6 +143,57 @@ function handCallbacks(bot) {
   bot.callbackQuery('add_new_admin', async (ctx) => {
     await ctx.answerCallbackQuery();
     await ctx.conversation.enter('addAdmin');
+  });
+
+  bot.callbackQuery('add_new_event', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.conversation.enter('addNewEvent');
+  });
+
+  bot.callbackQuery('add_new_mix', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.conversation.enter('addNewMix');
+  });
+
+  bot.callbackQuery('delete_mix', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.conversation.enter('deleteMix');
+  });
+
+  bot.callbackQuery('edit_solo_tulpan', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.reply('<b>Редактирование информации об однотонных тюльпанах</b>\n\nВыберите что хотите изменить 👇', {
+      reply_markup: keyboards.edit_solo_tulpan_inlineKb,
+      parse_mode: 'HTML',
+    });
+  });
+
+  bot.callbackQuery('back_to_admin_panel', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText('<b>Вы попали в админ панель.</b>\n\nВыберите действие которое хотите сделать 👇', {
+      reply_markup: keyboards.admin_panel_inlineKb,
+      parse_mode: 'HTML',
+    });
+  });
+
+  bot.callbackQuery('edit_solo_tulpan_price', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.conversation.enter('editSoloTulpanPrice');
+  });
+
+  bot.callbackQuery('edit_solo_tulpan_description', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.conversation.enter('editSoloTulpanDescription');
+  });
+
+  bot.callbackQuery('edit_solo_tulpan_images', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.conversation.enter('editSoloTulpanImages');
+  });
+
+  bot.callbackQuery('edit_growing_process_image', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.conversation.enter('editGrowingProcessImage');
   });
 }
 
